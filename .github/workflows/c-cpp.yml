@@ -1,59 +1,111 @@
-name: Debug Build
+name: Build Atmosphere
 
-on: [push]
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04  # 使用更稳定的Ubuntu版本
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
       with:
-        submodules: true
+        submodules: recursive
+        fetch-depth: 0
 
     - name: Install DevKitPro
       run: |
-        # 创建目录
-        sudo mkdir -p /opt/devkitpro
-        sudo chmod 777 /opt/devkitpro
-        
-        # 下载并安装devkitpro-pacman
-        wget -q https://github.com/devkitPro/pacman/releases/latest/download/devkitpro-pacman.amd64.deb
-        sudo dpkg -i devkitpro-pacman.amd64.deb
+        # 安装DevKitPro的pacman
+        wget https://github.com/devkitPro/pacman/releases/download/v1.0.2/devkitpro-pacman.amd64.deb
+        sudo dpkg -i devkitpro-pacman.amd64.deb || true
         sudo apt-get install -f -y
         
-        # 安装必要工具
-        sudo dkp-pacman -Syyu --noconfirm
-        sudo dkp-pacman -S --noconfirm devkitA64 aarch64-none-elf-gcc
+        # 更新包列表
+        sudo dkp-pacman -Syy
         
-        # 验证
-        ls -la /opt/devkitpro
-        which aarch64-none-elf-gcc
+        # 安装必要的工具链
+        sudo dkp-pacman -S --noconfirm \
+          devkitA64 \
+          switch-dev \
+          aarch64-none-elf-binutils \
+          aarch64-none-elf-gcc \
+          aarch64-none-elf-newlib \
+          switch-tools \
+          switch-pkg-config \
+          general-tools
+        
+        # 验证安装
+        echo "DevKitPro installed at: /opt/devkitpro"
+        ls -la /opt/devkitpro/
 
-    - name: Debug environment
+    - name: Install other dependencies
       run: |
-        echo "=== Current directory ==="
-        pwd
-        ls -la
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          python3 \
+          python3-pip \
+          p7zip-full \
+          zip \
+          unzip \
+          git \
+          wget \
+          curl \
+          libarchive-dev \
+          zlib1g-dev
         
-        echo "=== Environment variables ==="
-        env | grep -i devkit || echo "No devkit env vars"
-        
-        echo "=== Manual export ==="
-        export DEVKITPRO=/opt/devkitpro
-        export DEVKITA64=/opt/devkitpro/devkitA64
-        export PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:$PATH
-        
-        echo "DEVKITPRO=$DEVKITPRO"
-        echo "DEVKITA64=$DEVKITA64"
-        
-        # 直接测试make
-        make -n nx_release || echo "Make dry-run failed"
+        # 安装Python依赖
+        pip3 install pycryptodome pillow
 
-    - name: Try direct build
+    - name: Setup environment
       run: |
-        # 直接设置环境并运行
-        DEVKITPRO=/opt/devkitpro \
-        DEVKITA64=/opt/devkitpro/devkitA64 \
-        PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:$PATH \
-        make nx_release
+        # 设置环境变量
+        echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
+        echo "DEVKITA64=/opt/devkitpro/devkitA64" >> $GITHUB_ENV
+        echo "PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:$PATH" >> $GITHUB_ENV
+        
+        # 创建必要的目录结构
+        sudo mkdir -p /opt/devkitpro
+        sudo chmod 777 /opt/devkitpro
+
+    - name: Build Atmosphere
+      env:
+        DEVKITPRO: /opt/devkitpro
+        DEVKITA64: /opt/devkitpro/devkitA64
+      run: |
+        # 显示环境
+        echo "=== Build Environment ==="
+        echo "DEVKITPRO: $DEVKITPRO"
+        echo "DEVKITA64: $DEVKITA64"
+        echo "PATH: $PATH"
+        
+        # 验证工具链
+        echo "=== Toolchain Verification ==="
+        which aarch64-none-elf-gcc && aarch64-none-elf-gcc --version || echo "GCC not found"
+        which make && make --version || echo "Make not found"
+        
+        # 先尝试构建release版本
+        echo "=== Building Atmosphere (release) ==="
+        make nx_release 2>&1 | tail -50
+        
+        echo "=== Build output ==="
+        if [ -d "out" ]; then
+          ls -la out/
+        fi
+
+    - name: Upload artifacts
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: atmosphere-build
+        path: |
+          out/
+          *.bin
+          *.elf
+        retention-days: 7
