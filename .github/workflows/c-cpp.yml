@@ -6,10 +6,24 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+          - audit
+
+env:
+  DEVKITPRO: /opt/devkitpro
+  DEVKITA64: /opt/devkitpro/devkitA64
 
 jobs:
   build:
-    runs-on: ubuntu-22.04  # 使用更稳定的Ubuntu版本
+    runs-on: ubuntu-22.04
     
     steps:
     - name: Checkout repository
@@ -18,39 +32,43 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
-    - name: Install DevKitPro
+    - name: Setup DevKitPro
       run: |
-        # 安装DevKitPro的pacman
-        wget https://github.com/devkitPro/pacman/releases/download/v1.0.2/devkitpro-pacman.amd64.deb
-        sudo dpkg -i devkitpro-pacman.amd64.deb || true
-        sudo apt-get install -f -y
+        # 添加DevKitPro仓库
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg
         
-        # 更新包列表
-        sudo dkp-pacman -Syy
+        # 下载并安装devkitpro-pacman
+        wget -qO - 'https://apt.devkitpro.org/devkitpro.gpg' | sudo gpg --dearmor -o /usr/share/keyrings/devkitpro-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/devkitpro-archive-keyring.gpg] https://apt.devkitpro.org stable main" | sudo tee /etc/apt/sources.list.d/devkitpro.list
         
-        # 安装必要的工具链
+        # 安装devkitpro-pacman
+        sudo apt-get update
+        sudo apt-get install -y devkitpro-pacman
+        
+        # 安装必要的包
+        sudo dkp-pacman -Syu --noconfirm
         sudo dkp-pacman -S --noconfirm \
           devkitA64 \
           switch-dev \
-          aarch64-none-elf-binutils \
-          aarch64-none-elf-gcc \
-          aarch64-none-elf-newlib \
           switch-tools \
+          general-tools \
           switch-pkg-config \
-          general-tools
-        
-        # 验证安装
-        echo "DevKitPro installed at: /opt/devkitpro"
-        ls -la /opt/devkitpro/
+          switch-cmake \
+          aarch64-none-elf-gcc \
+          aarch64-none-elf-binutils \
+          aarch64-none-elf-newlib
 
-    - name: Install other dependencies
+    - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
           cmake \
+          make \
           python3 \
           python3-pip \
+          python3-dev \
           p7zip-full \
           zip \
           unzip \
@@ -58,54 +76,169 @@ jobs:
           wget \
           curl \
           libarchive-dev \
-          zlib1g-dev
-        
-        # 安装Python依赖
-        pip3 install pycryptodome pillow
+          libarchive-tools \
+          zlib1g-dev \
+          liblz4-dev \
+          liblzma-dev \
+          libssl-dev \
+          libpng-dev \
+          libjpeg-dev \
+          libsdl2-dev
 
-    - name: Setup environment
+    - name: Install Python dependencies
+      run: |
+        python3 -m pip install --upgrade pip
+        pip3 install \
+          pycryptodome \
+          pillow \
+          lz4 \
+          pyyaml
+        
+        # 检查是否安装成功
+        python3 -c "import Crypto; import PIL; print('Python dependencies OK')"
+
+    - name: Setup build environment
       run: |
         # 设置环境变量
         echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
         echo "DEVKITA64=/opt/devkitpro/devkitA64" >> $GITHUB_ENV
         echo "PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:$PATH" >> $GITHUB_ENV
         
-        # 创建必要的目录结构
+        # 验证环境
+        echo "=== Environment ==="
+        echo "DEVKITPRO: $DEVKITPRO"
+        echo "DEVKITA64: $DEVKITA64"
+        
+        # 确保目录存在
         sudo mkdir -p /opt/devkitpro
         sudo chmod 777 /opt/devkitpro
 
+    - name: Verify tools
+      run: |
+        echo "=== Checking build tools ==="
+        which make && make --version | head -1
+        which cmake && cmake --version | head -1
+        which python3 && python3 --version
+        which aarch64-none-elf-gcc && aarch64-none-elf-gcc --version | head -1
+        which build_romfs && echo "✓ build_romfs found" || echo "✗ build_romfs not found"
+        
+        # 检查DEVKITPRO目录
+        echo "=== DEVKITPRO directory ==="
+        ls -la /opt/devkitpro/ 2>/dev/null || echo "Directory not found"
+
+    - name: Clean previous builds
+      run: |
+        echo "Cleaning previous builds..."
+        make clean-all || echo "Clean command completed"
+
     - name: Build Atmosphere
       env:
-        DEVKITPRO: /opt/devkitpro
-        DEVKITA64: /opt/devkitpro/devkitA64
+        BUILD_TYPE: ${{ github.event.inputs.build_type || 'release' }}
       run: |
-        # 显示环境
-        echo "=== Build Environment ==="
-        echo "DEVKITPRO: $DEVKITPRO"
-        echo "DEVKITA64: $DEVKITA64"
-        echo "PATH: $PATH"
+        echo "=== Building Atmosphere (${{ github.event.inputs.build_type || 'release' }}) ==="
         
-        # 验证工具链
-        echo "=== Toolchain Verification ==="
-        which aarch64-none-elf-gcc && aarch64-none-elf-gcc --version || echo "GCC not found"
-        which make && make --version || echo "Make not found"
+        # 显示完整环境
+        echo "Environment variables:"
+        env | grep -E "(DEVKIT|PATH|HOME)" | sort
         
-        # 先尝试构建release版本
-        echo "=== Building Atmosphere (release) ==="
-        make nx_release 2>&1 | tail -50
+        # 检查当前目录
+        echo "Current directory: $(pwd)"
+        echo "Directory contents:"
+        ls -la
         
-        echo "=== Build output ==="
+        # 尝试构建
+        BUILD_TARGET="nx_${{ github.event.inputs.build_type || 'release' }}"
+        echo "Building target: $BUILD_TARGET"
+        
+        # 设置shell选项以捕获错误
+        set -e
+        
+        # 使用具体的make命令
+        make $BUILD_TARGET
+        
+        echo "=== Build completed successfully ==="
+        
+        # 检查输出
         if [ -d "out" ]; then
-          ls -la out/
+          echo "Build output directory:"
+          find out -type f -name "*.elf" -o -name "*.bin" | head -20
         fi
+
+    - name: Create distribution packages
+      if: success()
+      run: |
+        echo "=== Creating distribution packages ==="
+        
+        # 对于release版本创建dist-no-debug
+        if [ "${{ github.event.inputs.build_type || 'release' }}" = "release" ]; then
+          echo "Creating release distribution (dist-no-debug)..."
+          make dist-no-debug || {
+            echo "dist-no-debug failed, trying dist..."
+            make dist || echo "Both distribution methods failed"
+          }
+        else
+          echo "Creating debug distribution..."
+          make dist || echo "dist failed"
+        fi
+        
+        # 列出创建的包
+        echo "=== Created packages ==="
+        find . -name "atmosphere-*.zip" -o -name "fusee.bin" | xargs ls -lh 2>/dev/null || echo "No packages found"
+
+    - name: Test build output
+      if: success()
+      run: |
+        echo "=== Testing build output ==="
+        
+        # 检查关键文件是否存在
+        REQUIRED_FILES=(
+          "fusee/out/fusee.bin"
+          "out/fusee.bin"
+          "out/atmosphere-*.zip"
+        )
+        
+        for file in "${REQUIRED_FILES[@]}"; do
+          if ls $file 1>/dev/null 2>&1; then
+            echo "✓ Found: $file"
+            ls -lh $file | head -5
+          else
+            echo "✗ Missing: $file"
+          fi
+        done
 
     - name: Upload artifacts
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: atmosphere-build
+        name: atmosphere-${{ github.event.inputs.build_type || 'release' }}
         path: |
           out/
+          fusee/out/
           *.bin
           *.elf
-        retention-days: 7
+          *.zip
+        retention-days: 30
+        if-no-files-found: warn
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: Atmosphere ${{ github.ref_name }}
+        files: artifacts/**/*
+        draft: false
+        prerelease: false
+        generate_release_notes: true
