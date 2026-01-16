@@ -1,0 +1,43 @@
+name: Build Atmosphere
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  # 也可以手动触发工作流
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive' # Atmosphere可能有子模块
+
+      - name: 安装 devkitPro 工具链
+        run: |
+          wget https://github.com/devkitPro/pacman/releases/latest/download/devkitpro-pacman.amd64.deb
+          sudo dpkg -i devkitpro-pacman.amd64.deb
+          sudo dkp-pacman -Syu switch-dev --noconfirm
+
+      - name: 设置环境变量
+        run: |
+          echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
+          echo "DEVKITA64=/opt/devkitpro/devkitA64" >> $GITHUB_ENV
+          echo "PATH=$DEVKITPRO/tools/bin:$DEVKITPRO/devkitA64/bin:$PATH" >> $GITHUB_ENV
+
+      - name: 执行构建
+        run: |
+          make -j$(nproc) # 使用所有CPU核心并行编译
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: atmosphere-build
+          path: |
+            out/ # 这是假设的输出目录，具体路径需根据Makefile确定
+            fusee/fusee.bin
+          if-no-files-found: error
