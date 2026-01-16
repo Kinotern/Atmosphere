@@ -1,0 +1,53 @@
+name: Build Atmosphere for Kinotern/Atmosphere
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+    
+    - name: Setup DevKitPro via Docker
+      run: |
+        # 直接在宿主机上安装必要的工具
+        sudo apt-get update
+        sudo apt-get install -y docker.io
+        
+        # 运行Docker构建
+        docker run --rm \
+          -v "$PWD:/build" \
+          -w /build \
+          devkitpro/devkita64:latest \
+          /bin/bash -c "
+            echo 'Starting build...'
+            apt-get update && apt-get install -y python3 python3-pip p7zip-full
+            pip3 install pycryptodome pillow
+            make nx_release
+            echo 'Build completed!'
+            ls -la out/ 2>/dev/null || echo 'No output'
+          "
+    
+    - name: Check for output
+      run: |
+        if [ -d "out" ]; then
+          echo "Build output found:"
+          ls -la out/
+        else
+          echo "No output directory found"
+        fi
+    
+    - name: Upload artifacts
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-output
+        path: out/
+        retention-days: 5
