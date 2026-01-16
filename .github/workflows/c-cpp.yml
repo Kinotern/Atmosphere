@@ -1,34 +1,25 @@
-name: Build Atmosphere
+name: Test Build
 
-on: [push, pull_request]
+on: [push]
 
 jobs:
   build:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
-
-    - name: Install DevKitPro
-      uses: devkitPro/install-devkitpro-action@v2
-      with:
-        devkitA64: true
-
-    - name: Install dependencies
+    
+    - name: Setup Environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential cmake python3 python3-pip p7zip-full zip
-
-    - name: Build Release
-      run: |
-        make nx_release
-        make dist-no-debug
+        sudo apt-get install -y build-essential make python3
         
-    - name: Upload Release Build
-      uses: actions/upload-artifact@v4
-      with:
-        name: atmosphere-release
-        path: out/atmosphere-*.zip
+    - name: Try to build
+      run: |
+        # 只尝试构建release版本看看是否有效
+        make nx_release || {
+          echo "Build failed, showing error..."
+          exit 1
+        }
