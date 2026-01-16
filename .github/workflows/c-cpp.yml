@@ -1,4 +1,4 @@
-name: Test Build
+name: Debug Build
 
 on: [push]
 
@@ -9,17 +9,51 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        submodules: recursive
-    
-    - name: Setup Environment
+        submodules: true
+
+    - name: Install DevKitPro
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential make python3
+        # 创建目录
+        sudo mkdir -p /opt/devkitpro
+        sudo chmod 777 /opt/devkitpro
         
-    - name: Try to build
+        # 下载并安装devkitpro-pacman
+        wget -q https://github.com/devkitPro/pacman/releases/latest/download/devkitpro-pacman.amd64.deb
+        sudo dpkg -i devkitpro-pacman.amd64.deb
+        sudo apt-get install -f -y
+        
+        # 安装必要工具
+        sudo dkp-pacman -Syyu --noconfirm
+        sudo dkp-pacman -S --noconfirm devkitA64 aarch64-none-elf-gcc
+        
+        # 验证
+        ls -la /opt/devkitpro
+        which aarch64-none-elf-gcc
+
+    - name: Debug environment
       run: |
-        # 只尝试构建release版本看看是否有效
-        make nx_release || {
-          echo "Build failed, showing error..."
-          exit 1
-        }
+        echo "=== Current directory ==="
+        pwd
+        ls -la
+        
+        echo "=== Environment variables ==="
+        env | grep -i devkit || echo "No devkit env vars"
+        
+        echo "=== Manual export ==="
+        export DEVKITPRO=/opt/devkitpro
+        export DEVKITA64=/opt/devkitpro/devkitA64
+        export PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:$PATH
+        
+        echo "DEVKITPRO=$DEVKITPRO"
+        echo "DEVKITA64=$DEVKITA64"
+        
+        # 直接测试make
+        make -n nx_release || echo "Make dry-run failed"
+
+    - name: Try direct build
+      run: |
+        # 直接设置环境并运行
+        DEVKITPRO=/opt/devkitpro \
+        DEVKITA64=/opt/devkitpro/devkitA64 \
+        PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:$PATH \
+        make nx_release
