@@ -1,244 +1,53 @@
-name: Build Atmosphere
+name: Build Atmosphere for Kinotern/Atmosphere
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build type'
-        required: true
-        default: 'release'
-        type: choice
-        options:
-          - release
-          - debug
-          - audit
-
-env:
-  DEVKITPRO: /opt/devkitpro
-  DEVKITA64: /opt/devkitpro/devkitA64
+    branches: [ main ]
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
       with:
-        submodules: recursive
-        fetch-depth: 0
-
-    - name: Setup DevKitPro
+        submodules: true
+    
+    - name: Setup DevKitPro via Docker
       run: |
-        # 添加DevKitPro仓库
+        # 直接在宿主机上安装必要的工具
         sudo apt-get update
-        sudo apt-get install -y wget gnupg
+        sudo apt-get install -y docker.io
         
-        # 下载并安装devkitpro-pacman
-        wget -qO - 'https://apt.devkitpro.org/devkitpro.gpg' | sudo gpg --dearmor -o /usr/share/keyrings/devkitpro-archive-keyring.gpg
-        echo "deb [signed-by=/usr/share/keyrings/devkitpro-archive-keyring.gpg] https://apt.devkitpro.org stable main" | sudo tee /etc/apt/sources.list.d/devkitpro.list
-        
-        # 安装devkitpro-pacman
-        sudo apt-get update
-        sudo apt-get install -y devkitpro-pacman
-        
-        # 安装必要的包
-        sudo dkp-pacman -Syu --noconfirm
-        sudo dkp-pacman -S --noconfirm \
-          devkitA64 \
-          switch-dev \
-          switch-tools \
-          general-tools \
-          switch-pkg-config \
-          switch-cmake \
-          aarch64-none-elf-gcc \
-          aarch64-none-elf-binutils \
-          aarch64-none-elf-newlib
-
-    - name: Install system dependencies
+        # 运行Docker构建
+        docker run --rm \
+          -v "$PWD:/build" \
+          -w /build \
+          devkitpro/devkita64:latest \
+          /bin/bash -c "
+            echo 'Starting build...'
+            apt-get update && apt-get install -y python3 python3-pip p7zip-full
+            pip3 install pycryptodome pillow
+            make nx_release
+            echo 'Build completed!'
+            ls -la out/ 2>/dev/null || echo 'No output'
+          "
+    
+    - name: Check for output
       run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          cmake \
-          make \
-          python3 \
-          python3-pip \
-          python3-dev \
-          p7zip-full \
-          zip \
-          unzip \
-          git \
-          wget \
-          curl \
-          libarchive-dev \
-          libarchive-tools \
-          zlib1g-dev \
-          liblz4-dev \
-          liblzma-dev \
-          libssl-dev \
-          libpng-dev \
-          libjpeg-dev \
-          libsdl2-dev
-
-    - name: Install Python dependencies
-      run: |
-        python3 -m pip install --upgrade pip
-        pip3 install \
-          pycryptodome \
-          pillow \
-          lz4 \
-          pyyaml
-        
-        # 检查是否安装成功
-        python3 -c "import Crypto; import PIL; print('Python dependencies OK')"
-
-    - name: Setup build environment
-      run: |
-        # 设置环境变量
-        echo "DEVKITPRO=/opt/devkitpro" >> $GITHUB_ENV
-        echo "DEVKITA64=/opt/devkitpro/devkitA64" >> $GITHUB_ENV
-        echo "PATH=/opt/devkitpro/tools/bin:/opt/devkitpro/devkitA64/bin:$PATH" >> $GITHUB_ENV
-        
-        # 验证环境
-        echo "=== Environment ==="
-        echo "DEVKITPRO: $DEVKITPRO"
-        echo "DEVKITA64: $DEVKITA64"
-        
-        # 确保目录存在
-        sudo mkdir -p /opt/devkitpro
-        sudo chmod 777 /opt/devkitpro
-
-    - name: Verify tools
-      run: |
-        echo "=== Checking build tools ==="
-        which make && make --version | head -1
-        which cmake && cmake --version | head -1
-        which python3 && python3 --version
-        which aarch64-none-elf-gcc && aarch64-none-elf-gcc --version | head -1
-        which build_romfs && echo "✓ build_romfs found" || echo "✗ build_romfs not found"
-        
-        # 检查DEVKITPRO目录
-        echo "=== DEVKITPRO directory ==="
-        ls -la /opt/devkitpro/ 2>/dev/null || echo "Directory not found"
-
-    - name: Clean previous builds
-      run: |
-        echo "Cleaning previous builds..."
-        make clean-all || echo "Clean command completed"
-
-    - name: Build Atmosphere
-      env:
-        BUILD_TYPE: ${{ github.event.inputs.build_type || 'release' }}
-      run: |
-        echo "=== Building Atmosphere (${{ github.event.inputs.build_type || 'release' }}) ==="
-        
-        # 显示完整环境
-        echo "Environment variables:"
-        env | grep -E "(DEVKIT|PATH|HOME)" | sort
-        
-        # 检查当前目录
-        echo "Current directory: $(pwd)"
-        echo "Directory contents:"
-        ls -la
-        
-        # 尝试构建
-        BUILD_TARGET="nx_${{ github.event.inputs.build_type || 'release' }}"
-        echo "Building target: $BUILD_TARGET"
-        
-        # 设置shell选项以捕获错误
-        set -e
-        
-        # 使用具体的make命令
-        make $BUILD_TARGET
-        
-        echo "=== Build completed successfully ==="
-        
-        # 检查输出
         if [ -d "out" ]; then
-          echo "Build output directory:"
-          find out -type f -name "*.elf" -o -name "*.bin" | head -20
-        fi
-
-    - name: Create distribution packages
-      if: success()
-      run: |
-        echo "=== Creating distribution packages ==="
-        
-        # 对于release版本创建dist-no-debug
-        if [ "${{ github.event.inputs.build_type || 'release' }}" = "release" ]; then
-          echo "Creating release distribution (dist-no-debug)..."
-          make dist-no-debug || {
-            echo "dist-no-debug failed, trying dist..."
-            make dist || echo "Both distribution methods failed"
-          }
+          echo "Build output found:"
+          ls -la out/
         else
-          echo "Creating debug distribution..."
-          make dist || echo "dist failed"
+          echo "No output directory found"
         fi
-        
-        # 列出创建的包
-        echo "=== Created packages ==="
-        find . -name "atmosphere-*.zip" -o -name "fusee.bin" | xargs ls -lh 2>/dev/null || echo "No packages found"
-
-    - name: Test build output
-      if: success()
-      run: |
-        echo "=== Testing build output ==="
-        
-        # 检查关键文件是否存在
-        REQUIRED_FILES=(
-          "fusee/out/fusee.bin"
-          "out/fusee.bin"
-          "out/atmosphere-*.zip"
-        )
-        
-        for file in "${REQUIRED_FILES[@]}"; do
-          if ls $file 1>/dev/null 2>&1; then
-            echo "✓ Found: $file"
-            ls -lh $file | head -5
-          else
-            echo "✗ Missing: $file"
-          fi
-        done
-
+    
     - name: Upload artifacts
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: atmosphere-${{ github.event.inputs.build_type || 'release' }}
-        path: |
-          out/
-          fusee/out/
-          *.bin
-          *.elf
-          *.zip
-        retention-days: 30
-        if-no-files-found: warn
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    
-    steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: ${{ github.ref_name }}
-        name: Atmosphere ${{ github.ref_name }}
-        files: artifacts/**/*
-        draft: false
-        prerelease: false
-        generate_release_notes: true
+        name: build-output
+        path: out/
+        retention-days: 5
